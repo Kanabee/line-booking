@@ -1,217 +1,225 @@
-/**
- * ระบบจองคิวดูดวง: ตัวกลางระหว่างหน้าจองใน LINE กับ Google Sheet
- *
- * ตั้งค่าใน Apps Script > Project Settings > Script Properties
- *   LINE_CHANNEL_ACCESS_TOKEN  = Channel access token (long-lived) ของ channel Messaging API  (รหัสลับ ห้ามส่งให้ใคร)
- *   LOGIN_CHANNEL_ID           = 2012793478   (Channel ID ของ channel LINE Login ที่มี LIFF)
- *   OWNER_USER_ID              = (ไม่ใส่ก็ได้) userId LINE ของเจ้าของร้าน เพื่อให้แจ้งเตือนทุกครั้งที่มีคนจอง
- *
- * หลังวางโค้ดเวอร์ชันนี้ ให้กด Run ฟังก์ชัน setup 1 ครั้ง (เพิ่มคอลัมน์ชำระเงิน, ขออนุญาต Google Drive เก็บสลิป,
- * และตั้งให้ส่ง LINE ยืนยันการจองอัตโนมัติเมื่อเปลี่ยนสถานะใน Sheet เป็น "ยืนยันแล้ว")
- */
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>จองคิวดูดวง</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Mitr:wght@400;500;600&family=Sarabun:wght@400;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: warm, calm, trustworthy, like a reader's private salon
+   IDEA: a temple offering tray: marigold on deep plum cloth, slots like beads you pick
+   PICTURE: the working booking flow itself inside a LINE-sized phone column, admin beside it
+   COLOUR and TYPE: plum ground, lilac support, marigold accent; Mitr titles, Sarabun body
+   LAYOUT: tabs on top; customer view is one calm column; admin is a list with day filter */
+:root{color-scheme:light dark;
+--bg:light-dark(#f7f1f8,#1b0c22);--card:light-dark(#fff,#2a1434);--ink:light-dark(#2a1033,#f4e9f6);
+--mute:light-dark(#76607e,#b9a3c0);--line:light-dark(#e6d8ea,#432653);--plum:#3d1650;--lilac:light-dark(#efe2f5,#3a1f48);
+--gold:#f2b33d;--goldink:#3a2300;--grey:light-dark(#e4e0e6,#3a3340);--greyink:light-dark(#9b94a0,#7b7282);--ok:#2f9e63;--bad:#c2414b}
+:root[data-theme=light]{color-scheme:light}:root[data-theme=dark]{color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;padding:0 0 24px;background:var(--bg);color:var(--ink);font:16px/1.55 Sarabun,system-ui,sans-serif;overflow-x:clip}
+h1,h2,h3{font-family:Mitr,Sarabun,sans-serif;font-weight:500;line-height:1.15;margin:0;text-wrap:balance}
+header{background:var(--plum);color:#f9eefc;padding:22px max(5vw,16px) 0}
+header h1{font-size:clamp(26px,4vw,38px)}
+header p{margin:6px 0 16px;color:#d9c4e2;max-width:60ch}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
+.tabs button{font:500 16px Mitr,sans-serif;background:transparent;color:#d9c4e2;border:0;padding:12px 18px;border-radius:12px 12px 0 0;min-height:44px;cursor:pointer}
+.tabs button[aria-selected=true]{background:var(--bg);color:var(--ink)}
+main{padding:24px max(5vw,16px) 48px;max-width:1240px;margin:auto}
+.view[hidden]{display:none}
+.phone{max-width:460px;margin:auto;background:var(--card);border:1px solid var(--line);border-radius:24px;overflow:hidden;box-shadow:0 18px 40px -24px #3d165080}
+.bar{background:#06c755;color:#fff;padding:10px 16px;font:500 15px Mitr,sans-serif;display:flex;justify-content:space-between}
+.pad{padding:18px}
+.steps{display:flex;gap:6px;margin-bottom:14px}.steps i{flex:1;height:4px;border-radius:4px;background:var(--line)}.steps i.on{background:var(--gold)}
+h2{font-size:22px;margin-bottom:12px}
+.pk{display:grid;gap:10px}
+.pk button{display:grid;grid-template-columns:1fr auto;gap:2px 10px;text-align:left;font:inherit;color:inherit;background:var(--lilac);border:2px solid transparent;border-radius:14px;padding:14px;cursor:pointer}
+.pk button[aria-pressed=true]{border-color:var(--gold)}
+.pk b{font:500 17px Mitr,sans-serif}.pk .pr{font:600 17px Mitr,sans-serif;white-space:nowrap;align-self:start}.pk small{color:var(--mute);grid-column:1/-1}
+.days{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px;scroll-snap-type:x mandatory}
+.days button{flex:none;scroll-snap-align:start;width:62px;min-height:70px;border-radius:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;cursor:pointer;line-height:1.2}
+.days button b{display:block;font:500 20px Mitr,sans-serif}.days button[aria-pressed=true]{background:var(--gold);color:var(--goldink);border-color:var(--gold)}
+.days button:disabled{opacity:.45;cursor:not-allowed}
+.slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:14px}
+.slots button{min-height:48px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:500 16px Mitr,sans-serif;cursor:pointer;white-space:nowrap}
+.slots button[aria-pressed=true]{background:var(--gold);border-color:var(--gold);color:var(--goldink)}
+.slots button:disabled{background:var(--grey);color:var(--greyink);border-color:transparent;cursor:not-allowed;text-decoration:line-through}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;color:var(--mute);margin-top:10px}.legend span::before{content:"";display:inline-block;width:12px;height:12px;border-radius:4px;margin-right:6px;vertical-align:-1px;background:var(--c)}
+label{display:block;font-weight:600;margin:12px 0 4px}
+input,textarea,select{width:100%;font:16px Sarabun,sans-serif;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);min-height:44px}
+textarea{min-height:76px;resize:vertical}
+.go{display:flex;gap:8px;margin-top:18px}
+.btn{flex:1;min-height:48px;border:0;border-radius:12px;font:500 17px Mitr,sans-serif;cursor:pointer;background:var(--gold);color:var(--goldink)}
+.btn.sec{background:var(--lilac);color:var(--ink);flex:0 0 auto;padding:0 18px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.sum{background:var(--lilac);border-radius:14px;padding:14px;margin-top:6px}.sum div{display:flex;justify-content:space-between;gap:10px;padding:3px 0}.sum span{color:var(--mute)}
+.done{text-align:center;padding:10px 0}.done svg{width:96px;height:96px}
+.err{color:var(--bad);font-size:14px;min-height:1.4em;margin-top:8px}
+.note{font-size:14px;color:var(--mute);text-align:center;margin-top:14px}
+.adm{display:grid;grid-template-columns:300px minmax(0,1fr);gap:24px;align-items:start}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+.stats div{background:var(--lilac);border-radius:12px;padding:10px;text-align:center}.stats b{display:block;font:600 26px Mitr,sans-serif}.stats span{font-size:13px;color:var(--mute)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin-top:8px}
+.grid button{min-height:44px;border-radius:10px;border:1px dashed var(--line);background:transparent;color:var(--ink);font:500 15px Mitr,sans-serif;cursor:pointer}
+.grid button.bk{background:var(--gold);border:0;color:var(--goldink)}.grid button.bl{background:var(--grey);color:var(--greyink);border-style:solid}
+.list{display:grid;gap:10px}
+.row{display:grid;grid-template-columns:84px minmax(0,1fr) auto;gap:12px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.row .t{font:600 22px Mitr,sans-serif;white-space:nowrap}.row small{color:var(--mute);display:block}
+.chip{font-size:13px;padding:3px 10px;border-radius:20px;white-space:nowrap;background:var(--lilac)}
+.chip.ok{background:#2f9e6326;color:var(--ok)}.chip.bad{background:#c2414b22;color:var(--bad)}
+.acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.acts button{min-height:40px;padding:0 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;cursor:pointer}
+.empty{color:var(--mute);text-align:center;padding:30px;border:1px dashed var(--line);border-radius:14px}
+.mode{font-size:14px;color:var(--mute);margin-top:10px}
+@media(max-width:820px){.adm{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:520px){.row{grid-template-columns:64px minmax(0,1fr)}.row .acts{grid-column:1/-1;justify-content:flex-start}.row .t{font-size:19px}}
+@media(prefers-reduced-motion:no-preference){.done svg circle{animation:pop .6s ease-out}@keyframes pop{from{transform:scale(.6);opacity:0}}}
+</style>
+<style>.phone{border-radius:0;border:0;box-shadow:none;max-width:560px}.wait{text-align:center;padding:40px 10px;color:var(--mute)}.pay{margin-top:20px;border-top:1px solid var(--line);padding-top:18px}.qr{background:#fff;padding:14px;border-radius:14px;width:max-content;margin:12px auto}.qr img,.qr canvas{display:block;width:220px;height:220px}.acc{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--lilac);border-radius:12px;padding:10px 14px;margin-top:8px}.acc b{font:500 18px Mitr,sans-serif;white-space:nowrap}.acc button{min-height:40px;padding:0 14px;border-radius:10px;border:0;background:var(--gold);color:var(--goldink);font:inherit;cursor:pointer}.up{display:block;text-align:center;margin-top:14px;padding:14px;border:2px dashed var(--line);border-radius:14px;cursor:pointer}.up input{display:none}.ok{color:var(--ok);font-weight:600;text-align:center;margin-top:10px}</style>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<div class="phone">
+  <div class="pad" id="flow"><p class="wait">กำลังโหลด…</p></div>
+</div>
+<script>
+{
+/* ===== ตั้งค่า ===== */
+const LIFF_ID="2012793478-U2VKezeT";
+/* ช่องทางรับเงิน: ใส่เบอร์พร้อมเพย์ (10 หลัก) หรือเลขบัตรประชาชน (13 หลัก) แล้ว QR จะใส่ยอดเงินให้อัตโนมัติ */
+const PROMPTPAY="0625694056";
+const PAY_NAME="กาญณรัตน์ จันทร์สุวรรณ";
+const BANK="";             // เช่น "กสิกรไทย" (ไม่ใส่ก็ได้)
+const BANK_ACC="";         // เลขบัญชีธนาคาร (ไม่ใส่ก็ได้)
+const API_URL="https://script.google.com/macros/s/AKfycbzSVBcre72LaNVUGm3wpXu4sMrRsK-ntMA5JWMpJS_QMHtrg7vxkwW1Xl8HZ-icl76fsw/exec";
+/* =================== */
+const PK=[
+ {id:"t3",g:"chat",name:"พิมพ์ตอบ 3 คำถาม",price:99,d:"ส่งคำถามทางแชท แม่หมอพิมพ์ตอบกลับ"},
+ {id:"t5",g:"chat",name:"พิมพ์ตอบ 5 คำถาม",price:159,d:"ส่งคำถามทางแชท แม่หมอพิมพ์ตอบกลับ"},
+ {id:"ty",g:"chat",name:"ดูดวงรายปี ด้วยไพ่ตอง",price:599,d:"พิมพ์ตอบ ดูภาพรวมทั้งปี และถามเพิ่มได้ 5 คำถาม"},
+ {id:"c15",g:"call",name:"โทรคุย 15 นาที",price:159,d:"เลือกวันและเวลาที่สะดวก"},
+ {id:"c30",g:"call",name:"โทรคุย 30 นาที",price:259,d:"เลือกวันและเวลาที่สะดวก"},
+ {id:"c60",g:"call",name:"โทรคุย 60 นาที",price:499,d:"เลือกวันและเวลาที่สะดวก"}];
+const GROUPS=[["chat","พิมพ์ตอบทางแชท"],["call","โทรคุยกับแม่หมอ"]];
+const WD=["จันทร์","อังคาร","พุธ (กลางวัน)","พุธ (กลางคืน)","พฤหัสบดี","ศุกร์","เสาร์","อาทิตย์"];
+const isCall=id=>(PK.find(p=>p.id===id)||{}).g==="call";
+const TIMES=["10:00","11:00","13:00","14:00","15:00","16:00","17:00","19:00","20:00"];
+const CLOSED=[3]; // ปิดทุกวันพุธ
+const TH_D=["อา","จ","อ","พ","พฤ","ศ","ส"],TH_M=["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค."];
+const ST={pending:["รอยืนยัน",""],confirmed:["ยืนยันแล้ว","ok"],done:["เสร็จแล้ว","ok"],cancelled:["ยกเลิก","bad"]};
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const iso=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+const thDate=s=>{const d=new Date(s+"T00:00");return TH_D[d.getDay()]+" "+d.getDate()+" "+TH_M[d.getMonth()]+" "+(d.getFullYear()+543)};
+const baht=n=>n.toLocaleString("th-TH")+" บาท";
+const key=(d,t)=>d+"_"+t.replace(":","");
+const days=[...Array(14)].map((_,i)=>{const d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()+i);return d});
 
-const SHEET_NAME = 'คิว';
-const HEADERS = ['รหัสจอง', 'จองเมื่อ', 'ประเภท', 'แพ็กเกจ', 'ราคา', 'วันที่', 'เวลา',
-                 'ชื่อ', 'นามสกุล', 'เกิดวัน', 'อายุ', 'สถานะ', 'LINE userId', 'ชื่อใน LINE', 'ชำระเงิน', 'สลิป'];
-const COL = Object.fromEntries(HEADERS.map((h, i) => [h, i]));
-const ACTIVE = s => s !== 'ยกเลิก';
-const SLIP_FOLDER = 'สลิปโอนเงิน จองคิวดูดวง';
 
-// แพ็กเกจต้องตรงกับในหน้าจอง (index.html) ราคาจะยึดจากที่นี่
-const PACKAGES = {
-  t3:  { g: 'chat', name: 'พิมพ์ตอบ 3 คำถาม', price: 99 },
-  t5:  { g: 'chat', name: 'พิมพ์ตอบ 5 คำถาม', price: 159 },
-  ty:  { g: 'chat', name: 'ดูดวงรายปี ด้วยไพ่ตอง (ถามเพิ่มได้ 5 คำถาม)', price: 599 },
-  c15: { g: 'call', name: 'โทรคุย 15 นาที', price: 159 },
-  c30: { g: 'call', name: 'โทรคุย 30 นาที', price: 259 },
-  c60: { g: 'call', name: 'โทรคุย 60 นาที', price: 499 },
-};
+function crc16(str){let c=0xFFFF;for(let i=0;i<str.length;i++){c^=str.charCodeAt(i)<<8;for(let j=0;j<8;j++)c=(c&0x8000)?((c<<1)^0x1021)&0xFFFF:(c<<1)&0xFFFF}return c.toString(16).toUpperCase().padStart(4,"0")}
+function ppPayload(target,amount){
+  const f=(id,v)=>id+String(v.length).padStart(2,"0")+v;
+  const t=target.replace(/\D/g,"");
+  const acc=t.length>=13?f("02",t):f("01",("0000000000000"+"66"+t.replace(/^0/,"")).slice(-13));
+  let p=f("00","01")+f("01","12")+f("29",f("00","A000000677010111")+acc)+f("53","764")+f("54",amount.toFixed(2))+f("58","TH")+"6304";
+  return p+crc16(p);
+}
+const S={step:0,pk:null,day:null,time:null,first:"",last2:"",wd:"",age:"",img:null,err:"",last:null};
+let busy={},idToken=null;
+const isPast=(d,t)=>new Date(d+"T"+t)<new Date();
+const taken=(d,t)=>(busy[d]||[]).includes(t);
+const flow=document.getElementById("flow");
+const steps=n=>'<div class="steps">'+[0,1,2,3].map(i=>'<i class="'+(i<=n?"on":"")+'"></i>').join("")+"</div>";
 
-/** กด Run ฟังก์ชันนี้ครั้งแรกครั้งเดียว เพื่อสร้างแผ่นงานและหัวตาราง */
-function setup() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sh = ss.getSheetByName(SHEET_NAME) || ss.insertSheet(SHEET_NAME);
-  sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]).setFontWeight('bold');
-  sh.setFrozenRows(1);
-  const rule = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['รอยืนยัน', 'ยืนยันแล้ว', 'เสร็จแล้ว', 'ยกเลิก', 'ปิดรับ'], true).build();
-  sh.getRange(2, COL['สถานะ'] + 1, 1000, 1).setDataValidation(rule);
-  sh.getRange('F:G').setNumberFormat('@'); // เก็บวันที่/เวลาเป็นข้อความ
-  const pay = SpreadsheetApp.newDataValidation()
-    .requireValueInList(['ยังไม่โอน', 'แจ้งโอนแล้ว', 'ตรวจแล้ว', 'คืนเงินแล้ว'], true).build();
-  sh.getRange(2, COL['ชำระเงิน'] + 1, 1000, 1).setDataValidation(pay);
-  slipFolder_(); // ขออนุญาต Google Drive ไว้ล่วงหน้า
-  // ตั้ง trigger: แก้สถานะใน Sheet แล้วส่ง LINE หาลูกค้า (สร้างครั้งเดียว)
-  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'onStatusEdit')) {
-    ScriptApp.newTrigger('onStatusEdit').forSpreadsheet(ss).onEdit().create();
+async function loadBusy(){
+  if(!API_URL)return;
+  const r=await fetch(API_URL+"?action=busy&from="+iso(days[0])+"&to="+iso(days[days.length-1]));
+  const j=await r.json();if(j.ok)busy=j.busy||{};
+}
+function render(){
+  if(S.step===0){
+    flow.innerHTML=steps(0)+'<h2>เลือกแพ็กเกจ</h2>'+GROUPS.map(([g,t])=>'<h3 style="font-size:17px;margin:16px 0 8px">'+t+'</h3><div class="pk">'+PK.filter(p=>p.g===g).map(p=>'<button data-pk="'+p.id+'" aria-pressed="'+(S.pk===p.id)+'"><b>'+p.name+'</b><span class="pr">'+baht(p.price)+'</span><small>'+p.d+'</small></button>').join("")+'</div>').join("")+'<div class="go"><button class="btn" id="n0" '+(S.pk?"":"disabled")+'>'+(S.pk&&!isCall(S.pk)?"กรอกข้อมูล":"เลือกวันและเวลา")+'</button></div>';
+  }else if(S.step===1){
+    if(!S.day)S.day=iso(days.find(d=>!CLOSED.includes(d.getDay())));
+    flow.innerHTML=steps(1)+'<h2>เลือกวันและเวลาโทร</h2><div class="days">'+days.map(d=>{const k=iso(d),off=CLOSED.includes(d.getDay());return '<button data-day="'+k+'" aria-pressed="'+(S.day===k)+'" '+(off?"disabled":"")+'>'+TH_D[d.getDay()]+'<b>'+d.getDate()+'</b><small>'+(off?"ปิด":TH_M[d.getMonth()])+'</small></button>'}).join("")+'</div><div class="slots">'+TIMES.map(t=>{const full=taken(S.day,t)||isPast(S.day,t);return '<button data-t="'+t+'" aria-pressed="'+(S.time===t)+'" '+(full?'disabled aria-label="'+t+' ไม่ว่าง"':"")+'>'+t+'</button>'}).join("")+'</div><div class="legend"><span style="--c:var(--card);">ว่าง</span><span style="--c:var(--grey)">ไม่ว่าง</span><span style="--c:var(--gold)">ที่คุณเลือก</span></div><p class="err">'+esc(S.err)+'</p><div class="go"><button class="btn sec" id="b1">ย้อนกลับ</button><button class="btn" id="n1" '+(S.time?"":"disabled")+'>กรอกข้อมูล</button></div>';
+  }else if(S.step===2){
+    const p=PK.find(x=>x.id===S.pk),call=isCall(S.pk);
+    flow.innerHTML=steps(2)+'<h2>ข้อมูลผู้ดูดวง</h2><div class="sum"><div><span>แพ็กเกจ</span><b>'+p.name+'</b></div>'+(call?'<div><span>วันเวลาโทร</span><b>'+thDate(S.day)+' · '+S.time+'</b></div>':'<div><span>รูปแบบ</span><b>ตอบทางแชท ตามคิว</b></div>')+'<div><span>ราคา</span><b>'+baht(p.price)+'</b></div></div><form id="f"><label for="fn">ชื่อ</label><input id="fn" required autocomplete="given-name" value="'+esc(S.first)+'"><label for="fl">นามสกุล</label><input id="fl" required autocomplete="family-name" value="'+esc(S.last2)+'"><label for="fw">เกิดวันอะไร</label><select id="fw" required><option value="">เลือกวันเกิด</option>'+WD.map(w=>'<option'+(S.wd===w?" selected":"")+'>'+w+'</option>').join("")+'</select><label for="fa">อายุ (ปี)</label><input id="fa" required type="number" inputmode="numeric" min="1" max="119" value="'+esc(S.age)+'"><p class="err">'+esc(S.err)+'</p><div class="go"><button type="button" class="btn sec" id="b2">ย้อนกลับ</button><button class="btn" id="n2">ไปหน้าชำระเงิน</button></div></form>';
+  }else if(S.step===4){
+    const p=PK.find(x=>x.id===S.pk),call=isCall(S.pk);
+    flow.innerHTML=steps(3)+'<h2>ชำระเงิน '+baht(p.price)+'</h2><div class="sum"><div><span>แพ็กเกจ</span><b>'+p.name+'</b></div>'+(call?'<div><span>วันเวลาโทร</span><b>'+thDate(S.day)+' · '+S.time+'</b></div>':'')+'<div><span>ชื่อ</span><b>'+esc(S.first+" "+S.last2)+'</b></div></div>'+payHtml()+'<label class="up" id="uplabel"><span>'+(S.img?'✓ แนบสลิปแล้ว (แตะเพื่อเปลี่ยนรูป)':'📎 แนบสลิปโอนเงิน')+'</span><input type="file" id="slip" accept="image/*"></label><p class="err">'+esc(S.err)+'</p><div class="go"><button type="button" class="btn sec" id="b4">ย้อนกลับ</button><button class="btn" id="pay" '+(S.img?"":"disabled")+'>ส่งสลิปและยืนยันการจอง</button></div>';
+    drawQr(p.price);
+  }else{
+    const b=S.last,p=PK.find(x=>x.id===b.pk);
+    flow.innerHTML='<div class="done"><svg viewBox="0 0 96 96" aria-hidden="true"><circle cx="48" cy="48" r="44" fill="#f2b33d"/><path d="M28 50l13 13 27-29" fill="none" stroke="#3a2300" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/></svg><h2>ชำระเงินแล้ว กรุณารอตรวจสอบ</h2><p>แม่หมอจะตรวจยอดเงิน แล้วส่งข้อความคอนเฟิร์มการจองเข้าแชท LINE ค่ะ</p></div><div class="sum"><div><span>รหัสจอง</span><b>'+esc(b.id)+'</b></div><div><span>ชื่อ</span><b>'+esc(b.first+" "+b.last)+'</b></div><div><span>แพ็กเกจ</span><b>'+p.name+'</b></div>'+(isCall(b.pk)?'<div><span>วันเวลาโทร</span><b>'+thDate(b.date)+' · '+b.time+'</b></div>':'')+'<div><span>ยอดที่โอน</span><b>'+baht(p.price)+'</b></div><div><span>สถานะ</span><b>รอตรวจสอบสลิป</b></div></div><div class="go"><button class="btn" id="close">กลับไปที่แชท</button></div>';
   }
 }
-
-/** ทำงานอัตโนมัติเมื่อแก้ Sheet: เปลี่ยนสถานะเป็น ยืนยันแล้ว / ยกเลิก แล้วส่ง LINE หาลูกค้า */
-function onStatusEdit(e) {
-  const r = e.range, sh = r.getSheet();
-  if (sh.getName() !== SHEET_NAME || r.getRow() < 2 || r.getColumn() !== COL['สถานะ'] + 1 || r.getNumRows() !== 1) return;
-  const v = sh.getRange(r.getRow(), 1, 1, HEADERS.length).getDisplayValues()[0];
-  const status = v[COL['สถานะ']], userId = v[COL['LINE userId']];
-  const token = PropertiesService.getScriptProperties().getProperty('LINE_CHANNEL_ACCESS_TOKEN');
-  if (!token || !userId) return;
-  const when = v[COL['ประเภท']] === 'call' && v[COL['วันที่']]
-    ? '\nวันเวลาโทร: ' + thaiDate_(v[COL['วันที่']]) + ' เวลา ' + v[COL['เวลา']] + ' น.'
-    : '\nพิมพ์คำถามส่งมาในแชทนี้ได้เลยค่ะ แม่หมอจะตอบตามคิว';
-  if (status === 'ยืนยันแล้ว') {
-    sh.getRange(r.getRow(), COL['ชำระเงิน'] + 1).setValue('ตรวจแล้ว');
-    push_(token, userId, '✅ คอนเฟิร์มการจองแล้วค่ะ\nรหัสจอง: ' + v[COL['รหัสจอง']] + '\nแพ็กเกจ: ' + v[COL['แพ็กเกจ']] +
-      '\nยอดชำระ: ' + v[COL['ราคา']] + ' บาท (ตรวจสอบแล้ว)' + when + '\nขอบคุณที่ใช้บริการค่ะ 🙏');
-  } else if (status === 'ยกเลิก') {
-    push_(token, userId, 'การจองรหัส ' + v[COL['รหัสจอง']] + ' (' + v[COL['แพ็กเกจ']] + ') ถูกยกเลิกแล้วค่ะ หากมีข้อสงสัยพิมพ์สอบถามในแชทนี้ได้เลยค่ะ');
-  }
+function payHtml(){
+  return (PROMPTPAY?'<p style="margin:14px 0 0;color:var(--mute)">สแกน QR พร้อมเพย์ ยอดเงินใส่ไว้ให้แล้ว (หรือบันทึกภาพหน้าจอแล้วเปิดในแอปธนาคาร)</p><div class="qr" id="qr"></div><div class="acc"><span>พร้อมเพย์<br><b>'+esc(PROMPTPAY)+'</b></span><button type="button" data-copy="'+esc(PROMPTPAY.replace(/\D/g,""))+'">คัดลอก</button></div>':'')+(BANK_ACC?'<div class="acc"><span>'+esc(BANK)+'<br><b>'+esc(BANK_ACC)+'</b></span><button type="button" data-copy="'+esc(BANK_ACC.replace(/\D/g,""))+'">คัดลอก</button></div>':'')+(PAY_NAME?'<p style="margin:8px 0 0">ชื่อบัญชี: <b>'+esc(PAY_NAME)+'</b></p>':'');
 }
-
-function slipFolder_() {
-  const it = DriveApp.getFoldersByName(SLIP_FOLDER);
-  return it.hasNext() ? it.next() : DriveApp.createFolder(SLIP_FOLDER);
-}
-
-function sheet_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sh = ss.getSheetByName(SHEET_NAME);
-  if (!sh) { setup(); sh = ss.getSheetByName(SHEET_NAME); } // สร้างแผ่นงาน "คิว" ให้เองถ้ายังไม่มี
-  return sh;
-}
-function rows_() {
-  const sh = sheet_();
-  if (sh.getLastRow() < 2) return [];
-  return sh.getRange(2, 1, sh.getLastRow() - 1, HEADERS.length).getDisplayValues();
-}
-function json_(obj) {
-  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
-}
-
-/** GET ?action=busy&from=2026-11-25&to=2026-12-09  -> {busy:{"2026-11-26":["13:00"]}} */
-function doGet(e) {
-  const p = e.parameter || {};
-  if (p.action === 'busy') {
-    const busy = {};
-    rows_().forEach(r => {
-      const d = r[COL['วันที่']], t = r[COL['เวลา']];
-      if (r[COL['ประเภท']] !== 'call' && r[COL['สถานะ']] !== 'ปิดรับ') return;
-      if (!ACTIVE(r[COL['สถานะ']]) || !d || !t) return;
-      if (p.from && d < p.from) return;
-      if (p.to && d > p.to) return;
-      (busy[d] = busy[d] || []).push(t);
-    });
-    return json_({ ok: true, busy });
-  }
-  return json_({ ok: true, msg: 'booking api' });
-}
-
-/** POST (text/plain JSON) {idToken, pk, date, time, first, last, wd, age} */
-function doPost(e) {
-  let body;
-  try { body = JSON.parse(e.postData.contents); } catch (err) { return json_({ ok: false, error: 'bad_request' }); }
-
-  const pk = PACKAGES[body.pk];
-  if (!pk) return json_({ ok: false, error: 'bad_package' });
-  const first = String(body.first || '').trim().slice(0, 60);
-  const last = String(body.last || '').trim().slice(0, 60);
-  const wd = String(body.wd || '').trim().slice(0, 20);
-  const age = parseInt(body.age, 10);
-  if (!first || !last || !wd || !(age > 0 && age < 120)) return json_({ ok: false, error: 'missing_fields' });
-  const b64 = String(body.image || '');
-  if (!b64) return json_({ ok: false, error: 'no_slip' });
-  if (b64.length > 4000000) return json_({ ok: false, error: 'slip_too_big' });
-
-  const isCall = pk.g === 'call';
-  const date = isCall ? String(body.date || '') : Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd');
-  const time = isCall ? String(body.time || '') : '';
-  if (isCall && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time))) {
-    return json_({ ok: false, error: 'bad_slot' });
-  }
-
-  // ยืนยันตัวตนลูกค้าผ่าน LINE (กันคนยิงข้อมูลปลอมเข้าระบบ)
-  const auth = verifyUser_(body);
-  if (!auth.profile) { console.log('verify failed: ' + auth.why); return json_({ ok: false, error: 'not_logged_in', detail: auth.why }); }
-  const profile = auth.profile;
-
-  const lock = LockService.getScriptLock();
-  lock.waitLock(15000);
-  try {
-    if (isCall) {
-      const clash = rows_().some(r => r[COL['วันที่']] === date && r[COL['เวลา']] === time &&
-        (r[COL['ประเภท']] === 'call' || r[COL['สถานะ']] === 'ปิดรับ') && ACTIVE(r[COL['สถานะ']]));
-      if (clash) return json_({ ok: false, error: 'slot_taken' });
-    }
-    const id = 'BK' + Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyMMddHHmmss');
-    const slip = slipFolder_().createFile(Utilities.newBlob(Utilities.base64Decode(b64), 'image/jpeg', id + '.jpg'));
-    const row = [id, Utilities.formatDate(new Date(), 'Asia/Bangkok', 'yyyy-MM-dd HH:mm'), pk.g, pk.name, pk.price,
-                 date, time, first, last, wd, age, 'รอยืนยัน', profile.sub, profile.name || '', 'แจ้งโอนแล้ว', slip.getUrl()];
-    sheet_().appendRow(row);
-    SpreadsheetApp.flush();
-
-    notify_(profile.sub, pk, { id, date, time, first, last, slip: slip.getUrl() });
-    return json_({ ok: true, id, price: pk.price });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-// ยืนยันตัวตนลูกค้า: ลอง ID token ก่อน ถ้าหมดอายุใช้ access token แทน (access token อยู่ได้นานกว่า)
-function verifyUser_(body) {
-  const channelId = String(PropertiesService.getScriptProperties().getProperty('LOGIN_CHANNEL_ID') || '').trim() || '2012793478';
-  let why = '';
-  if (body.idToken) {
-    const res = UrlFetchApp.fetch('https://api.line.me/oauth2/v2.1/verify', {
-      method: 'post', payload: { id_token: body.idToken, client_id: channelId }, muteHttpExceptions: true,
-    });
-    if (res.getResponseCode() === 200) return { profile: JSON.parse(res.getContentText()) };
-    why = 'id:' + res.getContentText().slice(0, 120);
-  }
-  if (body.accessToken) {
-    const v = UrlFetchApp.fetch('https://api.line.me/oauth2/v2.1/verify?access_token=' + encodeURIComponent(body.accessToken),
-      { muteHttpExceptions: true });
-    const vj = v.getResponseCode() === 200 ? JSON.parse(v.getContentText()) : null;
-    if (vj && String(vj.client_id) === channelId && vj.expires_in > 0) {
-      const pr = UrlFetchApp.fetch('https://api.line.me/v2/profile', {
-        headers: { Authorization: 'Bearer ' + body.accessToken }, muteHttpExceptions: true,
-      });
-      if (pr.getResponseCode() === 200) {
-        const pj = JSON.parse(pr.getContentText());
-        return { profile: { sub: pj.userId, name: pj.displayName } };
+function drawQr(price){const el=document.getElementById("qr");if(!el||!window.QRCode)return;el.innerHTML="";new QRCode(el,{text:ppPayload(PROMPTPAY,price),width:440,height:440,correctLevel:QRCode.CorrectLevel.M})}
+function shrink(file){return new Promise((res,rej)=>{const img=new Image();img.onload=()=>{const k=Math.min(1,1400/Math.max(img.width,img.height));const c=document.createElement("canvas");c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);c.getContext("2d").drawImage(img,0,0,c.width,c.height);res(c.toDataURL("image/jpeg",.85).split(",")[1])};img.onerror=rej;img.src=URL.createObjectURL(file)})}
+flow.addEventListener("change",async e=>{
+  if(e.target.id!=="slip"||!e.target.files[0])return;
+  document.querySelector("#uplabel span").textContent="กำลังเตรียมรูป…";
+  try{S.img=await shrink(e.target.files[0]);S.err=""}catch(_){S.err="เปิดรูปนี้ไม่ได้ ลองเลือกรูปอื่นนะคะ"}
+  render();
+});
+function keep(){const g=i=>document.getElementById(i);S.first=g("fn").value.trim();S.last2=g("fl").value.trim();S.wd=g("fw").value;S.age=g("fa").value}
+flow.addEventListener("click",async e=>{
+  const b=e.target.closest("button");if(!b)return;
+  if(b.dataset.copy){try{await navigator.clipboard.writeText(b.dataset.copy);b.textContent="คัดลอกแล้ว"}catch(_){b.textContent=b.dataset.copy}return}
+  if(b.dataset.pk){S.pk=b.dataset.pk;render()}
+  else if(b.dataset.day){S.day=b.dataset.day;S.time=null;render()}
+  else if(b.dataset.t){S.time=b.dataset.t;render()}
+  else if(b.id==="n0"){S.err="";S.step=isCall(S.pk)?1:2;render();if(isCall(S.pk)){try{await loadBusy();render()}catch(_){}}}
+  else if(b.id==="n1"){S.step=2;S.err="";render()}
+  else if(b.id==="b1"){S.step=0;render()}
+  else if(b.id==="b2"){keep();S.step=isCall(S.pk)?1:0;render()}
+  else if(b.id==="b4"){S.step=2;S.err="";render()}
+  else if(b.id==="pay")submitBooking(b);
+  else if(b.id==="close"){if(window.liff&&liff.isInClient())liff.closeWindow();else{Object.assign(S,{step:0,pk:null,time:null});render()}}
+});
+const ERR={no_slip:"กรุณาแนบสลิปก่อนนะคะ",slip_too_big:"รูปสลิปใหญ่เกินไป ลองแคปหน้าจอสลิปแล้วแนบใหม่นะคะ",slot_taken:"ขออภัย เวลานี้มีคนจองไปแล้ว กรุณาเลือกเวลาใหม่",not_logged_in:"กรุณาเปิดหน้านี้จากใน LINE แล้วลองอีกครั้ง",missing_fields:"กรอกข้อมูลให้ครบก่อนนะคะ"};
+flow.addEventListener("submit",e=>{e.preventDefault();keep();S.err="";S.step=4;render()});
+async function submitBooking(btn){
+  btn.disabled=true;btn.textContent="กำลังส่ง…";
+  const call=isCall(S.pk),li=window.liff&&liff.isLoggedIn();
+  if(li)idToken=liff.getIDToken();
+  const payload={idToken,accessToken:li?liff.getAccessToken():null,pk:S.pk,date:call?S.day:"",time:call?S.time:"",first:S.first,last:S.last2,wd:S.wd,age:S.age,image:S.img};
+  try{
+    let j;
+    if(API_URL){const r=await fetch(API_URL,{method:"POST",body:JSON.stringify(payload)});j=await r.json()}
+    else j={ok:true,id:"DEMO"};
+    if(!j.ok){
+      if(j.error==="not_logged_in"&&window.liff&&!sessionStorage.getItem("relogin")){
+        try{sessionStorage.setItem("relogin","1");sessionStorage.setItem("draft",JSON.stringify(S))}catch(_){}
+        liff.logout();if(liff.isInClient())location.reload();else liff.login({redirectUri:location.href});return;
       }
-      why += ' profile:' + pr.getResponseCode();
-    } else {
-      why += ' at:' + (vj ? 'client_id ' + vj.client_id + ' != ' + channelId : v.getContentText().slice(0, 120));
+      S.err=(ERR[j.error]||"ส่งไม่สำเร็จ ลองใหม่อีกครั้งนะคะ")+(j.detail?" ("+j.detail+")":"");
+      if(j.error==="slot_taken"){S.time=null;S.step=1;try{await loadBusy()}catch(_){}}
+      render();return;
     }
-  }
-  return { why: why || 'no_token' };
+    try{sessionStorage.removeItem("relogin")}catch(_){}
+    S.last={id:j.id,pk:S.pk,date:S.day,time:S.time,first:S.first,last:S.last2};S.img=null;S.step=3;S.err="";render();
+  }catch(err){S.err="เชื่อมต่อไม่ได้ ลองใหม่อีกครั้งนะคะ";render()}
 }
 
-function thaiDate_(iso) {
-  const m = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
-  const [y, mo, d] = iso.split('-').map(Number);
-  return d + ' ' + m[mo - 1] + ' ' + (y + 543);
+(async()=>{
+  try{
+    if(window.liff){
+      await liff.init({liffId:LIFF_ID});
+      if(!liff.isLoggedIn()){liff.login({redirectUri:location.href});return}
+      idToken=liff.getIDToken();
+      try{const d=sessionStorage.getItem("draft");if(d){Object.assign(S,JSON.parse(d));S.err="ล็อกอินใหม่แล้ว กดส่งสลิปและยืนยันการจองอีกครั้งได้เลยค่ะ";sessionStorage.removeItem("draft")}}catch(_){}
+    }
+  }catch(err){S.err="เปิดผ่าน LINE ไม่สำเร็จ ("+(err.message||err)+")"}
+  render();
+})();
 }
-
-function notify_(userId, pk, b) {
-  const props = PropertiesService.getScriptProperties();
-  const token = props.getProperty('LINE_CHANNEL_ACCESS_TOKEN');
-  if (!token) return;
-  const when = pk.g === 'call' ? '\nวันเวลาโทร: ' + thaiDate_(b.date) + ' เวลา ' + b.time + ' น.' : '';
-  push_(token, userId, 'ได้รับการจองและสลิปแล้วค่ะ 🙏\nรหัสจอง: ' + b.id + '\nแพ็กเกจ: ' + pk.name +
-    '\nยอดชำระ: ' + pk.price + ' บาท' + when + '\nกรุณารอแม่หมอตรวจสอบยอดเงิน แล้วจะส่งข้อความคอนเฟิร์มการจองมาในแชทนี้ค่ะ');
-  const owner = props.getProperty('OWNER_USER_ID');
-  if (owner) {
-    push_(token, owner, '📌 คิวใหม่ (รอตรวจสลิป) ' + b.id + '\n' + b.first + ' ' + b.last + '\n' + pk.name + ' ' + pk.price + ' บาท' +
-      when + '\nสลิป: ' + b.slip + '\nตรวจยอดแล้ว เปลี่ยนสถานะใน Sheet เป็น "ยืนยันแล้ว" ระบบจะแจ้งลูกค้าให้เอง');
-  }
-}
-
-function push_(token, to, text) {
-  UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + token },
-    payload: JSON.stringify({ to, messages: [{ type: 'text', text }] }),
-    muteHttpExceptions: true,
-  });
-}
+</script>
+</body>
+</html>
