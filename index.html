@@ -156,16 +156,24 @@ flow.addEventListener("submit",async e=>{
   e.preventDefault();keep();
   const btn=document.getElementById("n2");btn.disabled=true;btn.textContent="กำลังจอง…";
   const call=isCall(S.pk);
-  const payload={idToken,pk:S.pk,date:call?S.day:"",time:call?S.time:"",first:S.first,last:S.last2,wd:S.wd,age:S.age};
+  if(window.liff&&liff.isLoggedIn())idToken=liff.getIDToken();
+  const accessToken=window.liff&&liff.isLoggedIn()?liff.getAccessToken():null;
+  const payload={idToken,accessToken,pk:S.pk,date:call?S.day:"",time:call?S.time:"",first:S.first,last:S.last2,wd:S.wd,age:S.age};
   try{
     let j;
     if(API_URL){const r=await fetch(API_URL,{method:"POST",body:JSON.stringify(payload)});j=await r.json()}
     else j={ok:true,id:"DEMO"};
     if(!j.ok){
-      S.err=ERR[j.error]||"จองไม่สำเร็จ ลองใหม่อีกครั้งนะคะ";
+      if(j.error==="not_logged_in"&&window.liff&&!sessionStorage.getItem("relogin")){
+        // token หมดอายุ: เก็บข้อมูลที่กรอกไว้ แล้วล็อกอินใหม่อัตโนมัติ
+        sessionStorage.setItem("relogin","1");sessionStorage.setItem("draft",JSON.stringify(S));
+        liff.logout();if(liff.isInClient())location.reload();else liff.login({redirectUri:location.href});return;
+      }
+      S.err=(ERR[j.error]||"จองไม่สำเร็จ ลองใหม่อีกครั้งนะคะ")+(j.detail?" ("+j.detail+")":"");
       if(j.error==="slot_taken"){S.time=null;S.step=1;try{await loadBusy()}catch(_){}}
       render();return;
     }
+    try{sessionStorage.removeItem("relogin")}catch(_){}
     S.last={id:j.id,pk:S.pk,date:S.day,time:S.time,first:S.first,last:S.last2};S.step=3;S.err="";render();
   }catch(err){S.err="เชื่อมต่อไม่ได้ ลองใหม่อีกครั้งนะคะ";render()}
 });
@@ -176,6 +184,7 @@ flow.addEventListener("submit",async e=>{
       await liff.init({liffId:LIFF_ID});
       if(!liff.isLoggedIn()){liff.login({redirectUri:location.href});return}
       idToken=liff.getIDToken();
+      try{const d=sessionStorage.getItem("draft");if(d){Object.assign(S,JSON.parse(d));S.err="ล็อกอินใหม่แล้ว กดยืนยันการจองอีกครั้งได้เลยค่ะ";sessionStorage.removeItem("draft")}}catch(_){}
     }
   }catch(err){S.err="เปิดผ่าน LINE ไม่สำเร็จ ("+(err.message||err)+")"}
   render();
